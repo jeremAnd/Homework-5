@@ -1,0 +1,98 @@
+---
+title: "Homwork 5"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidymodels)
+library(ISLR)
+library(ISLR2)
+library(tidyverse)
+library(glmnet)
+library(janitor)
+tidymodels_prefer()
+```
+
+```{r}
+poke <- read.csv('Pokemon.csv')
+```
+
+```{r}
+pokemon <- clean_names(poke)
+```
+Clean names made all the predictor names lowercase and replaced periods with underscores. This is useful because it allopws us to write code to access thes predictors, such as pokemon$type_1 without the periods and spaces condusing R.
+
+```{r}
+pokemon <- pokemon%>%filter(type_1 == 'Bug' | type_1== 'Fire' | type_1== 'Grass' | type_1== 'Normal' | type_1== 'Water' | type_1== 'Psychic')
+
+pokemon$legendary <- as.factor(pokemon$legendary)
+
+pokemon$type_1 <- as.factor(pokemon$type_1)
+pokemon$generation <- as.factor(pokemon$generation)
+
+ggplot(pokemon, aes(x=type_1)) + geom_bar() 
+```
+
+```{r}
+set.seed(608)
+pokeSplit <- initial_split(pokemon, prop = 0.80,
+                                strata = type_1)
+poke_train <- training(pokeSplit)
+poke_test <- testing(pokeSplit)
+```
+Training set has 364,Test had 94.
+
+```{r}
+poke_fold <- vfold_cv(poke_train, v = 5, strata = type_1)
+```
+We want to stratify the folds so that we don't end up with folds consisting mostly of one type or having very little of one type. 
+
+```{r}
+
+pokeRecipe <- recipe(type_1 ~ legendary + generation + sp_atk + attack + speed  + defense + hp + sp_def, data = poke_train) %>% step_dummy(all_nominal_predictors()) %>% step_normalize()
+summary(pokeRecipe)
+```
+
+```{r}
+penMix <- grid_regular(penalty(range=c(-5,5)), mixture(range= c(0,1)), levels = 10)
+mReg <- multinom_reg(penalty = tune(), mixture = tune()) %>% set_engine('glmnet') %>% set_mode('classification') 
+mWkflow <- workflow() %>% add_model(mReg) %>% add_recipe(pokeRecipe)
+```
+I will be fitting 50 models total
+
+```{r}
+tuneFit <- tune_grid(mWkflow, resamples = poke_fold, grid = penMix)
+autoplot(tuneFit)
+```
+smaller values of mixture and penalty produce better AUC and accuracy.
+
+
+```{r}
+selected <- select_best(tuneFit, metric = 'roc_auc')
+finalwkflw <- finalize_workflow(mWkflow, selected)
+
+final_fit <- fit(finalwkflw, data = poke_train)
+
+augment(final_fit, new_data = poke_test) %>% accuracy(truth = type_1, estimate = .pred_class)
+```
+low accuracy: 0.4042553	
+
+```{r}
+augment(final_fit, new_data = poke_test) %>% roc_auc(type_1, estimate = c(.pred_Bug, .pred_Fire, .pred_Grass, .pred_Normal, .pred_Water, .pred_Psychic))
+```
+AUC = 0.7050415	
+
+```{r}
+augment(final_fit, new_data = poke_test) %>% roc_curve(type_1, estimate = c(.pred_Bug, .pred_Fire, .pred_Grass, .pred_Normal, .pred_Water, .pred_Psychic)) %>% autoplot()
+```
+
+```{r}
+augment(final_fit, new_data = poke_test) %>% conf_mat(truth = type_1, estimate = .pred_class) %>% autoplot(type = 'heatmap')
+```
+
